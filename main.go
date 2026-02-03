@@ -1,15 +1,20 @@
 package main
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+	"sync/atomic"
+)
+
+type apiConfig struct {
+	fileserverHits atomic.Int32
+}
 
 func main() {
 	multiplexer := http.NewServeMux()
+	var apiCfg apiConfig
 
-	multiplexer.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	setupHandlers(multiplexer, &apiCfg)
 
 	var server http.Server
 	server.Handler = multiplexer
@@ -21,7 +26,39 @@ func main() {
 
 	indexServer := http.FileServer(system)
 
-	multiplexer.Handle("/", indexServer)
+	multiplexer.Handle("/app/", (&apiCfg).MetricsInc(http.StripPrefix("/app", indexServer)))
 	server.ListenAndServe()
 
+}
+
+func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
+	multiplexer.HandleFunc("/healthz", readinessHandler)
+	multiplexer.HandleFunc("/metrics", apiCfg.metricsHandler)
+	multiplexer.HandleFunc("/reset", apiCfg.metricsResetHandler)
+}
+
+func readinessHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+func (a *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	body := fmt.Sprintf("Hits: %v", a.fileserverHits.Load())
+	w.Write([]byte(body))
+}
+
+func (a *apiConfig) metricsResetHandler(w http.ResponseWriter, r *http.Request) {
+	a.fileserverHits.Store(0)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (a *apiConfig) MetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.fileserverHits.Add(1)
+		next.ServeHTTP(w, r)
+	})
 }
