@@ -32,9 +32,9 @@ func main() {
 }
 
 func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
-	multiplexer.HandleFunc("/healthz", readinessHandler)
-	multiplexer.HandleFunc("/metrics", apiCfg.metricsHandler)
-	multiplexer.HandleFunc("/reset", apiCfg.metricsResetHandler)
+	multiplexer.HandleFunc("GET /healthz", readinessHandler)
+	multiplexer.HandleFunc("GET /metrics", apiCfg.metricsHandler)
+	multiplexer.HandleFunc("POST /reset", apiCfg.metricsResetHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
