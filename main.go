@@ -32,9 +32,9 @@ func main() {
 }
 
 func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
-	multiplexer.HandleFunc("GET /healthz", readinessHandler)
-	multiplexer.HandleFunc("GET /metrics", apiCfg.metricsHandler)
-	multiplexer.HandleFunc("POST /reset", apiCfg.metricsResetHandler)
+	multiplexer.HandleFunc("GET /api/healthz", readinessHandler)
+	multiplexer.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
+	multiplexer.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -44,10 +44,10 @@ func readinessHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	htmlBody := fmt.Sprintf("<html><body><h1>Welcome, Chirpy Admin</h1><p>Chirpy has been visited %d times!</p></body></html>", a.fileserverHits.Load())
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	body := fmt.Sprintf("Hits: %v", a.fileserverHits.Load())
-	w.Write([]byte(body))
+	w.Write([]byte(htmlBody))
 }
 
 func (a *apiConfig) metricsResetHandler(w http.ResponseWriter, r *http.Request) {
