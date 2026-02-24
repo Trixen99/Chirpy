@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync/atomic"
 )
@@ -35,6 +37,7 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("GET /api/healthz", readinessHandler)
 	multiplexer.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	multiplexer.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
+	multiplexer.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -61,4 +64,64 @@ func (a *apiConfig) MetricsInc(next http.Handler) http.Handler {
 		a.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
+	type postData struct {
+		Body string `json:"body"`
+	}
+
+	type postResponse struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	pData := postData{}
+	err := decoder.Decode(&pData)
+	if err != nil {
+		respBody := postResponse{
+			Error: err.Error(),
+		}
+		dat, err := json.Marshal(respBody)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write(dat)
+		return
+	}
+
+	valid := false
+	respBody := postResponse{}
+	respStatus := 0
+	if len(pData.Body) <= 140 {
+		valid = true
+	}
+	if valid == false {
+		respBody = postResponse{
+			Error: "Chirp is too long",
+		}
+		respStatus = 400
+
+	} else {
+		respBody = postResponse{
+			Valid: true,
+		}
+		respStatus = 200
+	}
+	dat, err := json.Marshal(respBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(respStatus)
+	w.Write(dat)
+	return
+
 }
