@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -71,47 +72,31 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		Body string `json:"body"`
 	}
 
-	type postResponse struct {
-		Valid bool   `json:"valid"`
-		Error string `json:"error"`
-	}
-
 	decoder := json.NewDecoder(r.Body)
 	pData := postData{}
 	err := decoder.Decode(&pData)
 	if err != nil {
-		respBody := postResponse{
-			Error: err.Error(),
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(500)
-		w.Write(dat)
+		statuscode := 500
+		validateErrorHelper(w, r, err, statuscode)
 		return
 	}
 
-	valid := false
-	respBody := postResponse{}
-	respStatus := 0
-	if len(pData.Body) <= 140 {
-		valid = true
-	}
-	if valid == false {
-		respBody = postResponse{
-			Error: "Chirp is too long",
-		}
-		respStatus = 400
-
+	if len(pData.Body) > 140 {
+		statuscode := 400
+		validateErrorHelper(w, r, fmt.Errorf("Chirp is too long"), statuscode)
+		return
 	} else {
-		respBody = postResponse{
-			Valid: true,
-		}
-		respStatus = 200
+		respStatus := 200
+		validateSuccessHelper(w, r, pData.Body, respStatus)
+	}
+}
+
+func validateErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus int) {
+	type postErrorResponse struct {
+		Error string `json:"error"`
+	}
+	respBody := postErrorResponse{
+		Error: err.Error(),
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {
@@ -122,6 +107,40 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(respStatus)
 	w.Write(dat)
-	return
+}
 
+func validateSuccessHelper(w http.ResponseWriter, r *http.Request, text string, respStatus int) {
+	type postSuccessResponse struct {
+		Cleaned_body string `json:"cleaned_body"`
+	}
+	cleanedText := validateProfanityHelper(text)
+
+	respBody := postSuccessResponse{
+		Cleaned_body: cleanedText,
+	}
+	dat, err := json.Marshal(respBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(respStatus)
+	w.Write(dat)
+}
+
+func validateProfanityHelper(text string) string {
+	profanitys := []string{"kerfuffle", "sharbert", "fornax"}
+
+	splitText := strings.Fields(text)
+	for i, word := range splitText {
+		for _, profanity := range profanitys {
+			if strings.ToLower(word) == profanity {
+				splitText[i] = "****"
+			}
+		}
+	}
+	filteredText := strings.Join(splitText, " ")
+	return filteredText
 }
