@@ -1,22 +1,42 @@
 package main
 
 import (
+	"chirpy/internal/database"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	queries        *database.Queries
+	platform       string
 }
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		fmt.Printf("error opening database: %v", err)
+		return
+	}
 	multiplexer := http.NewServeMux()
 	var apiCfg apiConfig
 
+	dbQueries := database.New(db)
+	apiCfg.queries = dbQueries
+	apiCfg.platform = os.Getenv("PLATFORM")
 	setupHandlers(multiplexer, &apiCfg)
 
 	var server http.Server
@@ -29,7 +49,7 @@ func main() {
 
 	indexServer := http.FileServer(system)
 
-	multiplexer.Handle("/app/", (&apiCfg).MetricsInc(http.StripPrefix("/app", indexServer)))
+	multiplexer.Handle("/app/", (&apiCfg).MetricsInc(http.StripPrefix("/app/", indexServer)))
 	server.ListenAndServe()
 
 }
@@ -39,6 +59,7 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	multiplexer.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
 	multiplexer.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	multiplexer.HandleFunc("POST /api/users", apiCfg.usershandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +76,18 @@ func (a *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiConfig) metricsResetHandler(w http.ResponseWriter, r *http.Request) {
+	if a.platform != "dev" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 Forbidden"))
+		return
+	}
+	err := a.queries.ClearUsers(r.Context())
+	if err != nil {
+		log.Printf("Error Clearing Users: %s", err)
+		w.WriteHeader(500)
+		return
+	}
 	a.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -77,13 +110,13 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	err := decoder.Decode(&pData)
 	if err != nil {
 		statuscode := 500
-		validateErrorHelper(w, r, err, statuscode)
+		ErrorHelper(w, r, err, statuscode)
 		return
 	}
 
 	if len(pData.Body) > 140 {
 		statuscode := 400
-		validateErrorHelper(w, r, fmt.Errorf("Chirp is too long"), statuscode)
+		ErrorHelper(w, r, fmt.Errorf("Chirp is too long"), statuscode)
 		return
 	} else {
 		respStatus := 200
@@ -91,7 +124,7 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func validateErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus int) {
+func ErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus int) {
 	type postErrorResponse struct {
 		Error string `json:"error"`
 	}
@@ -143,4 +176,52 @@ func validateProfanityHelper(text string) string {
 	}
 	filteredText := strings.Join(splitText, " ")
 	return filteredText
+}
+
+func (a *apiConfig) usershandler(w http.ResponseWriter, r *http.Request) {
+	type jsonRequest struct {
+		Email string `json:"email"`
+	}
+
+	type jsonResponse struct {
+		Id         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email      string    `json:"email"`
+	}
+
+	var request jsonRequest
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&request)
+	if err != nil {
+		statusCode := 400
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+	user, err := a.queries.CreateUser(r.Context(), request.Email)
+	if err != nil {
+		statusCode := 500
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+
+	response := jsonResponse{
+		Id:         user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email:      user.Email,
+	}
+	dat, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	respStatus := 201
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(respStatus)
+	w.Write(dat)
+
 }
