@@ -58,8 +58,9 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("GET /api/healthz", readinessHandler)
 	multiplexer.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	multiplexer.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
-	multiplexer.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	//multiplexer.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	multiplexer.HandleFunc("POST /api/users", apiCfg.usershandler)
+	multiplexer.HandleFunc("POST /api/chirps", apiCfg.chirpsHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -100,30 +101,6 @@ func (a *apiConfig) MetricsInc(next http.Handler) http.Handler {
 	})
 }
 
-func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type postData struct {
-		Body string `json:"body"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	pData := postData{}
-	err := decoder.Decode(&pData)
-	if err != nil {
-		statuscode := 500
-		ErrorHelper(w, r, err, statuscode)
-		return
-	}
-
-	if len(pData.Body) > 140 {
-		statuscode := 400
-		ErrorHelper(w, r, fmt.Errorf("Chirp is too long"), statuscode)
-		return
-	} else {
-		respStatus := 200
-		validateSuccessHelper(w, r, pData.Body, respStatus)
-	}
-}
-
 func ErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus int) {
 	type postErrorResponse struct {
 		Error string `json:"error"`
@@ -137,27 +114,6 @@ func ErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus i
 		w.WriteHeader(500)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(respStatus)
-	w.Write(dat)
-}
-
-func validateSuccessHelper(w http.ResponseWriter, r *http.Request, text string, respStatus int) {
-	type postSuccessResponse struct {
-		Cleaned_body string `json:"cleaned_body"`
-	}
-	cleanedText := validateProfanityHelper(text)
-
-	respBody := postSuccessResponse{
-		Cleaned_body: cleanedText,
-	}
-	dat, err := json.Marshal(respBody)
-	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(respStatus)
 	w.Write(dat)
@@ -225,3 +181,84 @@ func (a *apiConfig) usershandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(dat)
 
 }
+
+func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
+	type jsonPayload struct {
+		Body    string    `json:"body"`
+		User_id uuid.UUID `json:"user_id"`
+	}
+	type Chirp struct {
+		Id         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		User_id    uuid.UUID `json:"user_id"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	pData := jsonPayload{}
+	err := decoder.Decode(&pData)
+	if err != nil {
+		statuscode := 500
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	if len(pData.Body) > 140 {
+		statuscode := 400
+		ErrorHelper(w, r, fmt.Errorf("Chirp is too long"), statuscode)
+		return
+	}
+
+	databaseChirp, err := a.queries.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   validateProfanityHelper(pData.Body),
+		UserID: pData.User_id,
+	})
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	newChirp := Chirp{
+		Id:         databaseChirp.ID,
+		Created_at: databaseChirp.CreatedAt,
+		Updated_at: databaseChirp.UpdatedAt,
+		Body:       databaseChirp.Body,
+		User_id:    databaseChirp.UserID,
+	}
+
+	dat, err := json.Marshal(newChirp)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write(dat)
+}
+
+/* func validateSuccessHelper(w http.ResponseWriter, r *http.Request, text string, respStatus int) {
+	type postSuccessResponse struct {
+		Cleaned_body string `json:"cleaned_body"`
+	}
+	cleanedText := validateProfanityHelper(text)
+
+	respBody := postSuccessResponse{
+		Cleaned_body: cleanedText,
+	}
+	dat, err := json.Marshal(respBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(respStatus)
+	w.Write(dat)
+}
+
+*/
