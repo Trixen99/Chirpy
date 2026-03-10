@@ -4,3 +4,15 @@ VALUES (
     gen_random_uuid(), NOW(), NOW(), $1, $2
 )
 RETURNING *;
+
+
+
+-- name: GetAllChirps :many
+select * from chirps
+order by created_at asc;
+
+
+-- name: GetChirpbyID :one
+select * from chirps
+where id = $1
+order by created_at asc;

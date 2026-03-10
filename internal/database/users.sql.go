@@ -7,7 +7,25 @@ package database
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
+
+const addPassword = `-- name: AddPassword :exec
+update users
+set hashed_password = $2
+where id = $1
+`
+
+type AddPasswordParams struct {
+	ID             uuid.UUID
+	HashedPassword string
+}
+
+func (q *Queries) AddPassword(ctx context.Context, arg AddPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, addPassword, arg.ID, arg.HashedPassword)
+	return err
+}
 
 const clearUsers = `-- name: ClearUsers :exec
 delete from users
@@ -23,7 +41,7 @@ INSERT INTO users (id, created_at, updated_at, email)
 VALUES (
     gen_random_uuid(), NOW(), NOW(), $1
 )
-RETURNING id, created_at, updated_at, email
+RETURNING id, created_at, updated_at, email, hashed_password
 `
 
 func (q *Queries) CreateUser(ctx context.Context, email string) (User, error) {
@@ -34,6 +52,24 @@ func (q *Queries) CreateUser(ctx context.Context, email string) (User, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Email,
+		&i.HashedPassword,
+	)
+	return i, err
+}
+
+const getPassword = `-- name: GetPassword :one
+select id, created_at, updated_at, email, hashed_password from users where email = $1
+`
+
+func (q *Queries) GetPassword(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getPassword, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+		&i.HashedPassword,
 	)
 	return i, err
 }

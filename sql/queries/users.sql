@@ -9,3 +9,15 @@ RETURNING *;
 
 -- name: ClearUsers :exec
 delete from users;
+
+
+
+
+-- name: AddPassword :exec
+update users
+set hashed_password = $2
+where id = $1;
+
+
+-- name: GetPassword :one
+select * from users where email = $1;

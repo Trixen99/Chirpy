@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chirpy/internal/auth"
 	"chirpy/internal/database"
 	"database/sql"
 	"encoding/json"
@@ -21,6 +22,25 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+}
+type Chirp struct {
+	ID         uuid.UUID `json:"id"`
+	Created_at time.Time `json:"created_at"`
+	Updated_at time.Time `json:"updated_at"`
+	Body       string    `json:"body"`
+	User_id    uuid.UUID `json:"user_id"`
+}
+
+type userRequest struct {
+	Password string `json:"Password"`
+	Email    string `json:"email"`
+}
+
+type userResponse struct {
+	Id         uuid.UUID `json:"id"`
+	Created_at time.Time `json:"created_at"`
+	Updated_at time.Time `json:"updated_at"`
+	Email      string    `json:"email"`
 }
 
 func main() {
@@ -58,9 +78,11 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("GET /api/healthz", readinessHandler)
 	multiplexer.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	multiplexer.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
-	//multiplexer.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	multiplexer.HandleFunc("POST /api/users", apiCfg.usershandler)
 	multiplexer.HandleFunc("POST /api/chirps", apiCfg.chirpsHandler)
+	multiplexer.HandleFunc("GET /api/chirps", apiCfg.getchirpsHandler)
+	multiplexer.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
+	multiplexer.HandleFunc("POST /api/login", apiCfg.loginHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -135,18 +157,8 @@ func validateProfanityHelper(text string) string {
 }
 
 func (a *apiConfig) usershandler(w http.ResponseWriter, r *http.Request) {
-	type jsonRequest struct {
-		Email string `json:"email"`
-	}
 
-	type jsonResponse struct {
-		Id         uuid.UUID `json:"id"`
-		Created_at time.Time `json:"created_at"`
-		Updated_at time.Time `json:"updated_at"`
-		Email      string    `json:"email"`
-	}
-
-	var request jsonRequest
+	var request userRequest
 
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&request)
@@ -162,7 +174,24 @@ func (a *apiConfig) usershandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := jsonResponse{
+	hash, err := auth.HashPassword(request.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	err = a.queries.AddPassword(r.Context(), database.AddPasswordParams{
+		ID:             user.ID,
+		HashedPassword: hash,
+	})
+	if err != nil {
+		log.Printf("Error storing password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	response := userResponse{
 		Id:         user.ID,
 		Created_at: user.CreatedAt,
 		Updated_at: user.UpdatedAt,
@@ -186,13 +215,6 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	type jsonPayload struct {
 		Body    string    `json:"body"`
 		User_id uuid.UUID `json:"user_id"`
-	}
-	type Chirp struct {
-		Id         uuid.UUID `json:"id"`
-		Created_at time.Time `json:"created_at"`
-		Updated_at time.Time `json:"updated_at"`
-		Body       string    `json:"body"`
-		User_id    uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -221,7 +243,7 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newChirp := Chirp{
-		Id:         databaseChirp.ID,
+		ID:         databaseChirp.ID,
 		Created_at: databaseChirp.CreatedAt,
 		Updated_at: databaseChirp.UpdatedAt,
 		Body:       databaseChirp.Body,
@@ -240,25 +262,114 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(dat)
 }
 
-/* func validateSuccessHelper(w http.ResponseWriter, r *http.Request, text string, respStatus int) {
-	type postSuccessResponse struct {
-		Cleaned_body string `json:"cleaned_body"`
-	}
-	cleanedText := validateProfanityHelper(text)
-
-	respBody := postSuccessResponse{
-		Cleaned_body: cleanedText,
-	}
-	dat, err := json.Marshal(respBody)
+func (a *apiConfig) getchirpsHandler(w http.ResponseWriter, r *http.Request) {
+	allChirps, err := a.queries.GetAllChirps(r.Context())
 	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	chirpsArray := make([]Chirp, len(allChirps))
+	for i, chirp := range allChirps {
+		chirpsArray[i] = Chirp{
+			ID:         chirp.ID,
+			Created_at: chirp.CreatedAt,
+			Updated_at: chirp.UpdatedAt,
+			Body:       chirp.Body,
+			User_id:    chirp.UserID,
+		}
+	}
+
+	dat, err := json.Marshal(chirpsArray)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(dat)
+
+}
+
+func (a *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
+	requestUserID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		statuscode := (404)
+		ErrorHelper(w, r, err, statuscode)
 		return
 	}
 
+	dbChirp, err := a.queries.GetChirpbyID(r.Context(), requestUserID)
+	if err != nil {
+		statuscode := (404)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	jsonChirp := Chirp{
+		ID:         dbChirp.ID,
+		Created_at: dbChirp.CreatedAt,
+		Updated_at: dbChirp.UpdatedAt,
+		Body:       dbChirp.Body,
+		User_id:    dbChirp.UserID,
+	}
+
+	dat, err := json.Marshal(jsonChirp)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(respStatus)
+	w.WriteHeader(http.StatusOK)
 	w.Write(dat)
+
 }
 
-*/
+func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	pData := userRequest{}
+	err := decoder.Decode(&pData)
+	if err != nil {
+		statusCode := 400
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+	user, err := a.queries.GetPassword(r.Context(), pData.Email)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	ok, err := auth.CheckPasswordHash(pData.Password, user.HashedPassword)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	if !ok {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+
+	userStruct := userResponse{
+		Id:         user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email:      user.Email,
+	}
+
+	dat, err := json.Marshal(userStruct)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(dat)
+
+}
