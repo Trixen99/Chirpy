@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestPassword_1(t *testing.T) {
 
 }
 
-func TestToken_1(t *testing.T) {
+func TestJWT_1(t *testing.T) {
 	type testCase struct {
 		id           uuid.UUID
 		key          string
@@ -78,5 +79,33 @@ func TestToken_1(t *testing.T) {
 		_, err := ValidateJWT(test.stringresult, "up,up,down,down,left,right,left,right,B,A")
 		assert.Error(t, err, "token signature is invalid: signature is invalid")
 	}
+
+}
+
+func TestToken_1(t *testing.T) {
+	type testCase struct {
+		input http.Header
+
+		expected string
+	}
+
+	t.Run("testing hashing and unhashing", func(t *testing.T) {
+		tests := []testCase{
+			{http.Header{"Authorization": []string{"Bearer ${jwtTokenSaul}"}}, "${jwtTokenSaul}"},
+			{http.Header{"Authorization": []string{"Bearer ${jwtTokenMike}"}}, "${jwtTokenMike}"},
+		}
+
+		for _, test := range tests {
+			token, err := GetBearerToken(test.input)
+			if err != nil {
+				assert.NoError(t, err)
+				continue
+			}
+
+			assert.Equal(t, test.expected, token)
+
+		}
+
+	})
 
 }

@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	jwtSecret      string
 }
 type Chirp struct {
 	ID         uuid.UUID `json:"id"`
@@ -32,7 +33,7 @@ type Chirp struct {
 }
 
 type userRequest struct {
-	Password string `json:"Password"`
+	Password string `json:"password"`
 	Email    string `json:"email"`
 }
 
@@ -41,6 +42,7 @@ type userResponse struct {
 	Created_at time.Time `json:"created_at"`
 	Updated_at time.Time `json:"updated_at"`
 	Email      string    `json:"email"`
+	Token      string    `json:"token"`
 }
 
 func main() {
@@ -57,6 +59,7 @@ func main() {
 	dbQueries := database.New(db)
 	apiCfg.queries = dbQueries
 	apiCfg.platform = os.Getenv("PLATFORM")
+	apiCfg.jwtSecret = os.Getenv("KC8I7S97uxNLnMoUb676+olJNQ/ONWHKbL0e3aoc8Iau8NwGrtodFzS5pPZK1FkgcHX99ZmVdpdMHpuLfdqZuA==")
 	setupHandlers(multiplexer, &apiCfg)
 
 	var server http.Server
@@ -217,14 +220,44 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 		User_id uuid.UUID `json:"user_id"`
 	}
 
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		statusCode := 401
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+	tokenUserID, err := auth.ValidateJWT(bearerToken, a.jwtSecret)
+	if err != nil {
+		statusCode := 401
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	pData := jsonPayload{}
-	err := decoder.Decode(&pData)
+	err = decoder.Decode(&pData)
 	if err != nil {
 		statuscode := 500
 		ErrorHelper(w, r, err, statuscode)
 		return
 	}
+
+	/*
+
+		fmt.Println("provided id")
+		fmt.Println(pData.User_id)
+		fmt.Print("\ntokenid\n")
+		fmt.Println(tokenUserID)
+		fmt.Print("\n")
+
+		if pData.User_id != tokenUserID {
+			err = fmt.Errorf("Token user ID doesn't match provided User")
+			statuscode := 401
+			ErrorHelper(w, r, err, statuscode)
+			return
+		}
+
+	*/
 
 	if len(pData.Body) > 140 {
 		statuscode := 400
@@ -233,8 +266,9 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	databaseChirp, err := a.queries.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body:   validateProfanityHelper(pData.Body),
-		UserID: pData.User_id,
+		Body: validateProfanityHelper(pData.Body),
+		//UserID: pData.User_id,
+		UserID: tokenUserID,
 	})
 	if err != nil {
 		statuscode := (500)
@@ -327,6 +361,12 @@ func (a *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
+	type userRequest struct {
+		Password           string `json:"password"`
+		Email              string `json:"email"`
+		Expires_in_seconds int    `json:"expires_in_seconds"`
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	pData := userRequest{}
 	err := decoder.Decode(&pData)
@@ -355,11 +395,23 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expires := time.Hour
+	if pData.Expires_in_seconds != 0 {
+		expires = time.Duration(pData.Expires_in_seconds) * time.Second
+	}
+
+	token, err := auth.MakeJWT(user.ID, a.jwtSecret, expires)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+	}
+
 	userStruct := userResponse{
 		Id:         user.ID,
 		Created_at: user.CreatedAt,
 		Updated_at: user.UpdatedAt,
 		Email:      user.Email,
+		Token:      token,
 	}
 
 	dat, err := json.Marshal(userStruct)
