@@ -109,3 +109,21 @@ func TestToken_1(t *testing.T) {
 	})
 
 }
+
+func TestRefreshToken_1(t *testing.T) {
+	sofar := make(map[string]string)
+
+	t.Run("testing hashing and unhashing", func(t *testing.T) {
+
+		for i := 0; i < 10; i++ {
+			token := MakeRefreshToken()
+
+			assert.NotContains(t, sofar, token)
+
+			sofar[token] = token
+
+		}
+
+	})
+
+}
