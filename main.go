@@ -38,11 +38,12 @@ type userRequest struct {
 }
 
 type userResponse struct {
-	Id         uuid.UUID `json:"id"`
-	Created_at time.Time `json:"created_at"`
-	Updated_at time.Time `json:"updated_at"`
-	Email      string    `json:"email"`
-	Token      string    `json:"token"`
+	Id           uuid.UUID `json:"id"`
+	Created_at   time.Time `json:"created_at"`
+	Updated_at   time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refreshToken"`
 }
 
 func main() {
@@ -242,23 +243,6 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	/*
-
-		fmt.Println("provided id")
-		fmt.Println(pData.User_id)
-		fmt.Print("\ntokenid\n")
-		fmt.Println(tokenUserID)
-		fmt.Print("\n")
-
-		if pData.User_id != tokenUserID {
-			err = fmt.Errorf("Token user ID doesn't match provided User")
-			statuscode := 401
-			ErrorHelper(w, r, err, statuscode)
-			return
-		}
-
-	*/
-
 	if len(pData.Body) > 140 {
 		statuscode := 400
 		ErrorHelper(w, r, fmt.Errorf("Chirp is too long"), statuscode)
@@ -362,9 +346,8 @@ func (a *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	type userRequest struct {
-		Password           string `json:"password"`
-		Email              string `json:"email"`
-		Expires_in_seconds int    `json:"expires_in_seconds"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -395,23 +378,31 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expires := time.Hour
-	if pData.Expires_in_seconds != 0 {
-		expires = time.Duration(pData.Expires_in_seconds) * time.Second
+	token, err := auth.MakeJWT(user.ID, a.jwtSecret, time.Hour)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
 	}
 
-	token, err := auth.MakeJWT(user.ID, a.jwtSecret, expires)
+	refreshToken := auth.MakeRefreshToken()
+
+	_, err = a.queries.AddRefreshToken(r.Context(), database.AddRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add((time.Hour * 24) * 60),
+	})
 	if err != nil {
 		statuscode := (401)
 		ErrorHelper(w, r, err, statuscode)
 	}
 
 	userStruct := userResponse{
-		Id:         user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
-		Email:      user.Email,
-		Token:      token,
+		Id:           user.ID,
+		Created_at:   user.CreatedAt,
+		Updated_at:   user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: refreshToken,
 	}
 
 	dat, err := json.Marshal(userStruct)
