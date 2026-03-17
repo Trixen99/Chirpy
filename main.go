@@ -43,7 +43,7 @@ type userResponse struct {
 	Updated_at   time.Time `json:"updated_at"`
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
-	RefreshToken string    `json:"refreshToken"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 func main() {
@@ -87,6 +87,8 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("GET /api/chirps", apiCfg.getchirpsHandler)
 	multiplexer.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	multiplexer.HandleFunc("POST /api/login", apiCfg.loginHandler)
+	multiplexer.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
+	multiplexer.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -392,9 +394,13 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: time.Now().Add((time.Hour * 24) * 60),
 	})
 	if err != nil {
+		log.Printf("Failed to insert refresh token: %v", err)
 		statuscode := (401)
 		ErrorHelper(w, r, err, statuscode)
+		return
 	}
+
+	log.Printf("Inserted refresh token: %s", refreshToken)
 
 	userStruct := userResponse{
 		Id:           user.ID,
@@ -414,5 +420,72 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(dat)
+
+}
+
+func (a *apiConfig) refreshHandler(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	log.Printf("Refresh token from header: %s", bearerToken)
+
+	TokenUser, err := a.queries.CheckTokenAndGetUser(r.Context(), bearerToken)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	/*if TokenUser.Tokenexpiresat.Time.Before(time.Now()) || TokenUser.Tokenexpiresat.Time.IsZero() {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	} */
+
+	type response struct {
+		Token string `json:"token"`
+	}
+	jwtToken, err := auth.MakeJWT(TokenUser.UserID, a.jwtSecret, time.Hour)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	jsonResponse := response{
+		Token: jwtToken,
+	}
+	dat, err := json.Marshal(jsonResponse)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(dat)
+
+}
+
+func (a *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	err = a.queries.RevokeToken(r.Context(), bearerToken)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
 
 }

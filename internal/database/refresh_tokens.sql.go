@@ -42,14 +42,14 @@ func (q *Queries) AddRefreshToken(ctx context.Context, arg AddRefreshTokenParams
 }
 
 const checkTokenAndGetUser = `-- name: CheckTokenAndGetUser :one
-select user_id, refresh_tokens.expires_at as tokenExpiresAt, refresh_tokens.revoked_at as tokenRevokedAt from users 
-full join refresh_tokens on users.user_id = refresh_tokens.user_id
-where refresh_tokens.token = $1
+select users.id as user_id, refresh_tokens.expires_at as tokenExpiresAt, refresh_tokens.revoked_at as tokenRevokedAt from users 
+inner join refresh_tokens on users.id = refresh_tokens.user_id
+where refresh_tokens.token = $1 and refresh_tokens.revoked_at is null and refresh_tokens.expires_at > NOW()
 `
 
 type CheckTokenAndGetUserRow struct {
-	UserID         uuid.NullUUID
-	Tokenexpiresat sql.NullTime
+	UserID         uuid.UUID
+	Tokenexpiresat time.Time
 	Tokenrevokedat sql.NullTime
 }
 
@@ -58,4 +58,15 @@ func (q *Queries) CheckTokenAndGetUser(ctx context.Context, token string) (Check
 	var i CheckTokenAndGetUserRow
 	err := row.Scan(&i.UserID, &i.Tokenexpiresat, &i.Tokenrevokedat)
 	return i, err
+}
+
+const revokeToken = `-- name: RevokeToken :exec
+update refresh_tokens
+set revoked_at = NOW(), updated_at = NOW()
+where token = $1
+`
+
+func (q *Queries) RevokeToken(ctx context.Context, token string) error {
+	_, err := q.db.ExecContext(ctx, revokeToken, token)
+	return err
 }
