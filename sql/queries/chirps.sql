@@ -16,3 +16,12 @@ order by created_at asc;
 select * from chirps
 where id = $1
 order by created_at asc;
+
+
+-- name: GetChirpbyIDCorrectUser :one
+select * from chirps
+where id = $1 and user_id = $2
+order by created_at asc;
+
+-- name: DeleteChirpByIDAndUser :exec
+delete from chirps where id = $1;

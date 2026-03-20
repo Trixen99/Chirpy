@@ -89,6 +89,8 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("POST /api/login", apiCfg.loginHandler)
 	multiplexer.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
 	multiplexer.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
+	multiplexer.HandleFunc("PUT /api/users", apiCfg.updateloginHandler)
+	multiplexer.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -252,8 +254,7 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	databaseChirp, err := a.queries.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body: validateProfanityHelper(pData.Body),
-		//UserID: pData.User_id,
+		Body:   validateProfanityHelper(pData.Body),
 		UserID: tokenUserID,
 	})
 	if err != nil {
@@ -313,14 +314,14 @@ func (a *apiConfig) getchirpsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
-	requestUserID, err := uuid.Parse(r.PathValue("chirpID"))
+	ChirpID, err := uuid.Parse(r.PathValue("chirpID"))
 	if err != nil {
 		statuscode := (404)
 		ErrorHelper(w, r, err, statuscode)
 		return
 	}
 
-	dbChirp, err := a.queries.GetChirpbyID(r.Context(), requestUserID)
+	dbChirp, err := a.queries.GetChirpbyID(r.Context(), ChirpID)
 	if err != nil {
 		statuscode := (404)
 		ErrorHelper(w, r, err, statuscode)
@@ -394,13 +395,12 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: time.Now().Add((time.Hour * 24) * 60),
 	})
 	if err != nil {
-		log.Printf("Failed to insert refresh token: %v", err)
 		statuscode := (401)
 		ErrorHelper(w, r, err, statuscode)
 		return
 	}
 
-	log.Printf("Inserted refresh token: %s", refreshToken)
+	log.Printf("\nInserted refresh token: %s", refreshToken)
 
 	userStruct := userResponse{
 		Id:           user.ID,
@@ -431,19 +431,12 @@ func (a *apiConfig) refreshHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Refresh token from header: %s", bearerToken)
-
 	TokenUser, err := a.queries.CheckTokenAndGetUser(r.Context(), bearerToken)
 	if err != nil {
 		statuscode := (401)
 		ErrorHelper(w, r, err, statuscode)
 		return
 	}
-	/*if TokenUser.Tokenexpiresat.Time.Before(time.Now()) || TokenUser.Tokenexpiresat.Time.IsZero() {
-		statuscode := (401)
-		ErrorHelper(w, r, err, statuscode)
-		return
-	} */
 
 	type response struct {
 		Token string `json:"token"`
@@ -488,4 +481,112 @@ func (a *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNoContent)
 
+}
+
+func (a *apiConfig) updateloginHandler(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	uuid, err := auth.ValidateJWT(bearerToken, a.jwtSecret)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	log.Printf("\nRefresh token from header: %s", bearerToken)
+
+	var request userRequest
+
+	decoder := json.NewDecoder(r.Body)
+	err = decoder.Decode(&request)
+	if err != nil {
+		statusCode := 400
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+
+	hash, err := auth.HashPassword(request.Password)
+	if err != nil {
+		statusCode := 400
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+
+	user, err := a.queries.UpdateEmailAndPassword(r.Context(), database.UpdateEmailAndPasswordParams{
+		ID:             uuid,
+		Email:          request.Email,
+		HashedPassword: hash,
+	})
+	if err != nil {
+		statusCode := 401
+		ErrorHelper(w, r, err, statusCode)
+		return
+	}
+
+	jsonUserResponse := userResponse{
+		Id:         user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email:      user.Email,
+	}
+
+	dat, err := json.Marshal(jsonUserResponse)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(dat)
+
+}
+
+func (a *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	user_uuid, err := auth.ValidateJWT(bearerToken, a.jwtSecret)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	chirpID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		statuscode := (404)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	_, err = a.queries.GetChirpbyIDCorrectUser(r.Context(), database.GetChirpbyIDCorrectUserParams{
+		ID:     chirpID,
+		UserID: user_uuid,
+	})
+	if err != nil {
+		statuscode := (403)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	err = a.queries.DeleteChirpByIDAndUser(r.Context(), chirpID)
+	if err != nil {
+		statuscode := (403)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
 }

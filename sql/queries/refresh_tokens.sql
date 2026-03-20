@@ -17,3 +17,4 @@ where refresh_tokens.token = $1 and refresh_tokens.revoked_at is null and refres
 update refresh_tokens
 set revoked_at = NOW(), updated_at = NOW()
 where token = $1;
+
