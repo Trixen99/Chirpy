@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -144,6 +145,12 @@ func ErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus i
 		w.WriteHeader(500)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(respStatus)
+	w.Write(dat)
+}
+
+func RespondWithJson(w http.ResponseWriter, r *http.Request, dat []byte, respStatus int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(respStatus)
 	w.Write(dat)
@@ -417,9 +424,10 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		ErrorHelper(w, r, err, statuscode)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(dat)
+	RespondWithJson(w, r, dat, http.StatusOK)
+	//w.Header().Set("Content-Type", "application/json")
+	//w.WriteHeader(http.StatusOK)
+	//w.Write(dat)
 
 }
 
@@ -483,6 +491,14 @@ func (a *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func decoderHelper[S any](body io.ReadCloser) (S, error) {
+	defer body.Close()
+	var request S
+	decoder := json.NewDecoder(body)
+	err := decoder.Decode(&request)
+	return request, err
+}
+
 func (a *apiConfig) updateloginHandler(w http.ResponseWriter, r *http.Request) {
 	bearerToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -500,10 +516,10 @@ func (a *apiConfig) updateloginHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("\nRefresh token from header: %s", bearerToken)
 
-	var request userRequest
+	request, err := decoderHelper[userRequest](r.Body)
 
-	decoder := json.NewDecoder(r.Body)
-	err = decoder.Decode(&request)
+	//decoder := json.NewDecoder(r.Body)
+	//err = decoder.Decode(&request)
 	if err != nil {
 		statusCode := 400
 		ErrorHelper(w, r, err, statusCode)
@@ -541,11 +557,7 @@ func (a *apiConfig) updateloginHandler(w http.ResponseWriter, r *http.Request) {
 		ErrorHelper(w, r, err, statuscode)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(dat)
-
+	RespondWithJson(w, r, dat, http.StatusOK)
 }
 
 func (a *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
