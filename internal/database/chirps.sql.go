@@ -48,11 +48,13 @@ func (q *Queries) DeleteChirpByIDAndUser(ctx context.Context, id uuid.UUID) erro
 
 const getAllChirps = `-- name: GetAllChirps :many
 select id, created_at, updated_at, body, user_id from chirps
-order by created_at asc
+order by 
+case when $1 = 'asc' then created_at end asc,
+case when $1 = 'desc' then created_at end desc
 `
 
-func (q *Queries) GetAllChirps(ctx context.Context) ([]Chirp, error) {
-	rows, err := q.db.QueryContext(ctx, getAllChirps)
+func (q *Queries) GetAllChirps(ctx context.Context, dollar_1 interface{}) ([]Chirp, error) {
+	rows, err := q.db.QueryContext(ctx, getAllChirps, dollar_1)
 	if err != nil {
 		return nil, err
 	}
@@ -121,4 +123,46 @@ func (q *Queries) GetChirpbyIDCorrectUser(ctx context.Context, arg GetChirpbyIDC
 		&i.UserID,
 	)
 	return i, err
+}
+
+const getChirpsbyUserID = `-- name: GetChirpsbyUserID :many
+select id, created_at, updated_at, body, user_id from chirps
+where user_id = $1
+order by 
+case when $2 = 'asc' then created_at end asc,
+case when $2 = 'desc' then created_at end desc
+`
+
+type GetChirpsbyUserIDParams struct {
+	UserID  uuid.UUID
+	Column2 interface{}
+}
+
+func (q *Queries) GetChirpsbyUserID(ctx context.Context, arg GetChirpsbyUserIDParams) ([]Chirp, error) {
+	rows, err := q.db.QueryContext(ctx, getChirpsbyUserID, arg.UserID, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Chirp
+	for rows.Next() {
+		var i Chirp
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Body,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

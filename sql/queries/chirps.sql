@@ -9,7 +9,9 @@ RETURNING *;
 
 -- name: GetAllChirps :many
 select * from chirps
-order by created_at asc;
+order by 
+case when $1 = 'asc' then created_at end asc,
+case when $1 = 'desc' then created_at end desc;
 
 
 -- name: GetChirpbyID :one
@@ -25,3 +27,11 @@ order by created_at asc;
 
 -- name: DeleteChirpByIDAndUser :exec
 delete from chirps where id = $1;
+
+
+-- name: GetChirpsbyUserID :many
+select * from chirps
+where user_id = $1
+order by 
+case when $2 = 'asc' then created_at end asc,
+case when $2 = 'desc' then created_at end desc;

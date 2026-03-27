@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -24,6 +23,7 @@ type apiConfig struct {
 	queries        *database.Queries
 	platform       string
 	jwtSecret      string
+	polka_key      string
 }
 type Chirp struct {
 	ID         uuid.UUID `json:"id"`
@@ -39,12 +39,13 @@ type userRequest struct {
 }
 
 type userResponse struct {
-	Id           uuid.UUID `json:"id"`
-	Created_at   time.Time `json:"created_at"`
-	Updated_at   time.Time `json:"updated_at"`
-	Email        string    `json:"email"`
-	Token        string    `json:"token"`
-	RefreshToken string    `json:"refresh_token"`
+	Id            uuid.UUID `json:"id"`
+	Created_at    time.Time `json:"created_at"`
+	Updated_at    time.Time `json:"updated_at"`
+	Email         string    `json:"email"`
+	Token         string    `json:"token"`
+	RefreshToken  string    `json:"refresh_token"`
+	Is_chirpy_red bool      `json:"is_chirpy_red"`
 }
 
 func main() {
@@ -52,7 +53,6 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		fmt.Printf("error opening database: %v", err)
 		return
 	}
 	multiplexer := http.NewServeMux()
@@ -61,7 +61,8 @@ func main() {
 	dbQueries := database.New(db)
 	apiCfg.queries = dbQueries
 	apiCfg.platform = os.Getenv("PLATFORM")
-	apiCfg.jwtSecret = os.Getenv("KC8I7S97uxNLnMoUb676+olJNQ/ONWHKbL0e3aoc8Iau8NwGrtodFzS5pPZK1FkgcHX99ZmVdpdMHpuLfdqZuA==")
+	apiCfg.jwtSecret = os.Getenv("JWTSECRET")
+	apiCfg.polka_key = os.Getenv("POLKA_KEY")
 	setupHandlers(multiplexer, &apiCfg)
 
 	var server http.Server
@@ -92,6 +93,7 @@ func setupHandlers(multiplexer *http.ServeMux, apiCfg *apiConfig) {
 	multiplexer.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
 	multiplexer.HandleFunc("PUT /api/users", apiCfg.updateloginHandler)
 	multiplexer.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
+	multiplexer.HandleFunc("POST /api/polka/webhooks", apiCfg.webhookHandler)
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +118,6 @@ func (a *apiConfig) metricsResetHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	err := a.queries.ClearUsers(r.Context())
 	if err != nil {
-		log.Printf("Error Clearing Users: %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -141,7 +142,6 @@ func ErrorHelper(w http.ResponseWriter, r *http.Request, err error, respStatus i
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -191,7 +191,6 @@ func (a *apiConfig) usershandler(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := auth.HashPassword(request.Password)
 	if err != nil {
-		log.Printf("Error hashing password: %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -201,20 +200,19 @@ func (a *apiConfig) usershandler(w http.ResponseWriter, r *http.Request) {
 		HashedPassword: hash,
 	})
 	if err != nil {
-		log.Printf("Error storing password: %s", err)
 		w.WriteHeader(500)
 		return
 	}
 
 	response := userResponse{
-		Id:         user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
-		Email:      user.Email,
+		Id:            user.ID,
+		Created_at:    user.CreatedAt,
+		Updated_at:    user.UpdatedAt,
+		Email:         user.Email,
+		Is_chirpy_red: user.IsChirpyRed,
 	}
 	dat, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -291,12 +289,43 @@ func (a *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiConfig) getchirpsHandler(w http.ResponseWriter, r *http.Request) {
-	allChirps, err := a.queries.GetAllChirps(r.Context())
-	if err != nil {
-		statuscode := (500)
-		ErrorHelper(w, r, err, statuscode)
-		return
+	author_ID := uuid.Nil
+	var err error
+	stringuuid := r.URL.Query().Get("author_id")
+	if stringuuid != "" {
+		author_ID, err = uuid.Parse(stringuuid)
+		if err != nil {
+			statuscode := (400)
+			ErrorHelper(w, r, err, statuscode)
+			return
+		}
 	}
+	sortOrder := r.URL.Query().Get("sort")
+	if sortOrder == "" {
+		sortOrder = "asc"
+	}
+
+	var allChirps []database.Chirp
+
+	if author_ID == uuid.Nil {
+		allChirps, err = a.queries.GetAllChirps(r.Context(), sortOrder)
+		if err != nil {
+			statuscode := (500)
+			ErrorHelper(w, r, err, statuscode)
+			return
+		}
+	} else {
+		allChirps, err = a.queries.GetChirpsbyUserID(r.Context(), database.GetChirpsbyUserIDParams{
+			UserID:  author_ID,
+			Column2: sortOrder,
+		})
+		if err != nil {
+			statuscode := (500)
+			ErrorHelper(w, r, err, statuscode)
+			return
+		}
+	}
+
 	chirpsArray := make([]Chirp, len(allChirps))
 	for i, chirp := range allChirps {
 		chirpsArray[i] = Chirp{
@@ -317,7 +346,6 @@ func (a *apiConfig) getchirpsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(dat)
-
 }
 
 func (a *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
@@ -407,15 +435,14 @@ func (a *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("\nInserted refresh token: %s", refreshToken)
-
 	userStruct := userResponse{
-		Id:           user.ID,
-		Created_at:   user.CreatedAt,
-		Updated_at:   user.UpdatedAt,
-		Email:        user.Email,
-		Token:        token,
-		RefreshToken: refreshToken,
+		Id:            user.ID,
+		Created_at:    user.CreatedAt,
+		Updated_at:    user.UpdatedAt,
+		Email:         user.Email,
+		Token:         token,
+		RefreshToken:  refreshToken,
+		Is_chirpy_red: user.IsChirpyRed,
 	}
 
 	dat, err := json.Marshal(userStruct)
@@ -514,12 +541,8 @@ func (a *apiConfig) updateloginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("\nRefresh token from header: %s", bearerToken)
-
 	request, err := decoderHelper[userRequest](r.Body)
 
-	//decoder := json.NewDecoder(r.Body)
-	//err = decoder.Decode(&request)
 	if err != nil {
 		statusCode := 400
 		ErrorHelper(w, r, err, statusCode)
@@ -545,10 +568,11 @@ func (a *apiConfig) updateloginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonUserResponse := userResponse{
-		Id:         user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
-		Email:      user.Email,
+		Id:            user.ID,
+		Created_at:    user.CreatedAt,
+		Updated_at:    user.UpdatedAt,
+		Email:         user.Email,
+		Is_chirpy_red: user.IsChirpyRed,
 	}
 
 	dat, err := json.Marshal(jsonUserResponse)
@@ -601,4 +625,46 @@ func (a *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *apiConfig) webhookHandler(w http.ResponseWriter, r *http.Request) {
+	type webhookdata struct {
+		User_id uuid.UUID `json:"user_id"`
+	}
+	type webhook struct {
+		Event string      `json:"event"`
+		Data  webhookdata `json:"data"`
+	}
+
+	apikey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	if apikey != a.polka_key {
+		statuscode := (401)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+
+	request, err := decoderHelper[webhook](r.Body)
+	if err != nil {
+		statuscode := (500)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	if request.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	err = a.queries.PromoteToRed(r.Context(), request.Data.User_id)
+	if err != nil {
+		statuscode := (404)
+		ErrorHelper(w, r, err, statuscode)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+
 }

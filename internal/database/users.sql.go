@@ -41,7 +41,7 @@ INSERT INTO users (id, created_at, updated_at, email)
 VALUES (
     gen_random_uuid(), NOW(), NOW(), $1
 )
-RETURNING id, created_at, updated_at, email, hashed_password
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red
 `
 
 func (q *Queries) CreateUser(ctx context.Context, email string) (User, error) {
@@ -53,12 +53,13 @@ func (q *Queries) CreateUser(ctx context.Context, email string) (User, error) {
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
 
 const getPassword = `-- name: GetPassword :one
-select id, created_at, updated_at, email, hashed_password from users where email = $1
+select id, created_at, updated_at, email, hashed_password, is_chirpy_red from users where email = $1
 `
 
 func (q *Queries) GetPassword(ctx context.Context, email string) (User, error) {
@@ -70,15 +71,27 @@ func (q *Queries) GetPassword(ctx context.Context, email string) (User, error) {
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
+}
+
+const promoteToRed = `-- name: PromoteToRed :exec
+update users
+set is_chirpy_red = True
+where id = $1
+`
+
+func (q *Queries) PromoteToRed(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, promoteToRed, id)
+	return err
 }
 
 const updateEmailAndPassword = `-- name: UpdateEmailAndPassword :one
 update users
 set email = $2, hashed_password = $3
 where id = $1
-RETURNING id, created_at, updated_at, email, hashed_password
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red
 `
 
 type UpdateEmailAndPasswordParams struct {
@@ -96,6 +109,7 @@ func (q *Queries) UpdateEmailAndPassword(ctx context.Context, arg UpdateEmailAnd
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
